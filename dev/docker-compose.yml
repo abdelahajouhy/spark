@@ -1,0 +1,76 @@
+x-spark: &spark
+  build: .
+  image: databde-poseidon-spark:4.0.2
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+# x-spark-master-resources: &spark-master-resources
+#   SPARK_DAEMON_MEMORY: "128m"
+  
+# x-spark-worker-resources: &spark-worker-resources # retirer car le worker doit disposer d’assez de ressources pour accepter l’executor (768Mbi)
+#   SPARK_WORKER_MEMORY: "512m"
+#   SPARK_WORKER_CORES: "1"
+#   SPARK_DAEMON_MEMORY: "128m"
+
+services:
+  spark-master:
+    <<: *spark
+    container_name: spark-master
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+    environment:
+      SPARK_MASTER_HOST: spark-master
+      #<<: *spark-master-resources
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+    restart: unless-stopped
+
+  spark-worker1:
+    <<: *spark
+    container_name: spark-worker1
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    #environment:
+    #  <<: *spark-worker-resources
+    depends_on: [spark-master]
+    restart: unless-stopped
+
+  # spark-worker2:
+  #   <<: *spark
+  #   container_name: spark-worker2
+  #   command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+  #   environment:
+  #     <<: *spark-worker-resources
+  #   depends_on: [spark-master]
+  #   restart: unless-stopped
+
+  spark-connect:
+    <<: *spark
+    container_name: spark-connect
+    hostname: spark-connect
+    ports:
+      - "4040:4040"
+      - "15002:15002"
+    depends_on: [spark-master]
+    command:
+      - /opt/spark/sbin/start-connect-server.sh
+      - --wait
+      - --master
+      - spark://spark-master:7077
+      - --conf
+      - spark.executor.memory=768m
+      - --conf
+      - spark.driver.host=spark-connect
+      # - --conf
+      # - spark.hadoop.fs.s3a.endpoint=http://minio:9000
+      # - --conf
+      # - spark.hadoop.fs.s3a.path.style.access=true
+      # - --conf
+      # - spark.hadoop.fs.s3a.connection.ssl.enabled=false
+      # - --conf
+      # - spark.hadoop.fs.s3a.access.key=${MINIO_ACCESS_KEY}
+      # - --conf
+      # - spark.hadoop.fs.s3a.secret.key=${MINIO_SECRET_KEY}
+    restart: unless-stopped

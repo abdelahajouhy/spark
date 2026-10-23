@@ -1,9 +1,14 @@
 FROM apache/spark:4.0.2
 ARG MVN=https://repo1.maven.org/maven2
 
-# --- Client Python Elasticsearch (indexation via foreachPartition) ---
 USER root
-RUN pip3 install --no-cache-dir "elasticsearch>=9.5,<9.6"
+RUN pip3 install --no-cache-dir \
+    "pandas==2.3.3" \
+    "pyarrow==25.0.1" \
+    "grpcio==1.84.1" \
+    "grpcio-status==1.84.1" \
+    "elasticsearch>=9.5,<9.6"
+
 USER spark
 
 # --- Kafka (consummer / producer) ---

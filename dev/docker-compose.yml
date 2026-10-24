@@ -53,6 +53,8 @@ services:
     ports:
       - "4040:4040"
       - "15002:15002"
+    volumes:
+      - /applis/spark/checkpoints:/opt/spark/work-dir/checkpoints
     depends_on: [spark-master]
     command:
       - /opt/spark/sbin/start-connect-server.sh

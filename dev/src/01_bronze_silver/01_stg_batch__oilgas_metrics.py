@@ -1,3 +1,24 @@
+# Standard library imports
+from pathlib import Path
+
+# Third-party imports (PySpark)
+from pyspark.sql import SparkSession
+
+from pyspark.sql.functions import (
+    col,
+    decode,
+    explode,
+    coalesce,
+    split,
+    window,
+    first,
+    struct,
+    timestamp_millis
+)
+from pyspark.sql.protobuf.functions import from_protobuf
+
+# Local application imports
+
 """
 ====================== BATCH FOR SILVER ====================
 
@@ -9,62 +30,71 @@ and displays the results for validation.
 
 """
 
-from pyspark.sql import SparkSession
-from pyspark.sql.protobuf.functions import from_protobuf
-from pyspark.sql.functions import col, hex, length, decode, explode, flatten, timestamp_millis, coalesce, split, first, round, window, avg
-from sparkplug_types import cast_datatype
-import time
-import inspect
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DESC_PATH = PROJECT_ROOT / "proto" / "sparkplugb_poseidon.desc"
 
-"""
-                                SPARK SESSION
-"""
+# Configuration parameters
+KAFKA_BROKERS = "192.168.112.138:9092,192.168.112.139:9092,192.168.112.140:9092"
+KAFKA_TOPIC_SRC = "prod.oilgas.bronze"
+
+# ==============================================================================
+# SPARK SESSION & DATA INGESTION
+# ==============================================================================
+
+# Initialize Spark Session (Spark Connect)
 spark = (
         SparkSession.builder
         .remote("sc://192.168.112.139:15002")
-        .appName("prod.oilgas.streaming")
+        .appName("prod.oilgas.batch")
         .getOrCreate()
 )
 
-"""
-                                READ FROM TOPIC
-"""
-topic_raw = spark \
-  .read \
-  .format("kafka") \
-  .option("kafka.bootstrap.servers", "192.168.112.138:9092,192.168.112.139:9092,192.168.112.140:9092") \
-  .option("subscribe", "prod.oilgas.bronze") \
-  .load()
+# Tuning configuration
+spark.conf.set("spark.sql.shuffle.partitions", "1")
 
-"""
-                                df_raw = RAW DATA : decode key value protobuff + explode metrics
-"""
-df_raw= topic_raw.select(
-    col("timestamp").alias("kafka_ts"),
-    col("topic").alias("kafka_topic"),
-    "key",
-    "value"
-    ).select(
-    "kafka_ts",
-    "kafka_topic",
-    decode(col("key"),"UTF-8").alias("topic_mqtt"),
-    from_protobuf(
-        data=col("value"), 
-        messageName="org.eclipse.tahu.protobuf.Payload",
-        descFilePath="proto/sparkplugb_poseidon.desc",
-        options={"recursive.fields.max.depth": "3"}
-        ).alias("data"),
-    ).select(
-      "kafka_ts",
-      "kafka_topic",
-      "topic_mqtt",
-      explode("data.metrics").alias("raw_metrics")
+# Read streaming data from Kafka
+df_bronze = (
+    spark.read
+    .format("kafka")
+    .option("kafka.bootstrap.servers", KAFKA_BROKERS)
+    .option("subscribe", KAFKA_TOPIC_SRC)
+    .option("startingOffsets", "earliest")
+    .load()
+)
+
+# ==============================================================================
+# df_raw = RAW DATA : decode key value protobuff + explode metrics
+# ==============================================================================
+df_raw = (
+    df_bronze
+    .select(
+        col("timestamp").alias("kafka_ts"),
+        col("topic").alias("kafka_topic"),
+        "key",
+        "value"
     )
+    .select(
+        "kafka_ts",
+        "kafka_topic",
+        decode(col("key"), "UTF-8").alias("topic_mqtt"),
+        from_protobuf(
+            data=col("value"), 
+            messageName="org.eclipse.tahu.protobuf.Payload",
+            descFilePath=str(DESC_PATH),
+            options={"recursive.fields.max.depth": "3"}
+        ).alias("data"),
+    )
+    .select(
+        "kafka_ts",
+        "kafka_topic",
+        "topic_mqtt",
+        explode("data.metrics").alias("raw_metrics")
+    )
+)
 
-
-"""
-                                df_metrics = METRICS DATA : DEDUPLICATE
-"""
+# ==============================================================================
+# df_metrics = METRICS DATA : DEDUPLICATE
+# ==============================================================================
 df_metrics= df_raw.select(
     "kafka_topic",
     "kafka_ts",
@@ -91,9 +121,6 @@ df_metrics= df_raw.select(
     'string_value',
    ])
 
-"""
-                                df_pivot = METRICS DATA : PIVOT + GROUPBY + AGG
-"""
 df_pivot = df_metrics.select(
     "kafka_topic",
     "kafka_ts",
@@ -130,4 +157,5 @@ df_pivot = df_metrics.select(
         col('metric_ts_per_3s')
         )
 
-df_pivot.show(n=5,truncate=False,vertical=True)
+df_pivot.show(n=4,truncate=False,vertical=False)
+
